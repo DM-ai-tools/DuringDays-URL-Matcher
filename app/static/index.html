@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>During Days · URL Matcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body>
+  <div class="orb orb-a" aria-hidden="true"></div>
+  <div class="orb orb-b" aria-hidden="true"></div>
+  <div class="orb orb-c" aria-hidden="true"></div>
+
+  <header class="topbar glass">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>
+        <strong>During Days</strong>
+        <em>URL Matcher</em>
+      </span>
+    </a>
+    <nav class="tabs" role="tablist">
+      <button type="button" class="tab active" data-view="dashboard">Dashboard</button>
+      <button type="button" class="tab" data-view="match">Match</button>
+      <button type="button" class="tab" data-view="sources">Catalogues</button>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <!-- DASHBOARD -->
+    <section id="view-dashboard" class="view active">
+      <div class="hero glass">
+        <div>
+          <p class="kicker">Operations</p>
+          <h1>Match product URLs at scale</h1>
+          <p class="sub">Upload a sheet, pick rows, fill BigW links from live sitemap catalogues.</p>
+        </div>
+        <button type="button" class="glass-btn primary pulse" id="go-match">Start a match</button>
+      </div>
+      <div class="stat-grid" id="dash-stats"></div>
+      <div class="two-col">
+        <article class="panel glass">
+          <div class="panel-head">
+            <h2>Recent jobs</h2>
+            <button type="button" class="glass-btn ghost sm" id="refresh-dash">Refresh</button>
+          </div>
+          <div id="dash-jobs" class="job-list"></div>
+        </article>
+        <article class="panel glass">
+          <div class="panel-head"><h2>Catalogues</h2></div>
+          <div id="dash-sources" class="job-list"></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- MATCH -->
+    <section id="view-match" class="view">
+      <div class="hero glass compact">
+        <div>
+          <p class="kicker">Match job</p>
+          <h1>Fill product URLs</h1>
+          <p class="sub">Upload Excel → choose catalogue &amp; row range → preview &amp; download the result.</p>
+        </div>
+      </div>
+
+      <div class="two-col match-setup">
+        <article class="panel glass" id="step-upload">
+          <h2>1 · Workbook</h2>
+          <label class="drop glass-inset" id="dropzone">
+            <input type="file" id="file-input" accept=".xlsx,.xlsm" hidden />
+            <span class="drop-ico" aria-hidden="true">⇪</span>
+            <strong>Drop .xlsx here</strong>
+            <span>or click to browse</span>
+          </label>
+          <div id="upload-meta" class="meta"></div>
+        </article>
+
+        <article class="panel glass" id="step-range">
+          <h2>2 · Range &amp; catalogue</h2>
+          <div class="grid-2">
+            <label class="field">Catalogue
+              <select id="site-select"></select>
+            </label>
+            <label class="field">Sheet
+              <select id="sheet-select"></select>
+            </label>
+            <label class="field">Start row
+              <input type="number" id="start-row" min="2" value="2" />
+            </label>
+            <label class="field">End row
+              <input type="number" id="end-row" min="2" value="50" />
+            </label>
+          </div>
+          <p class="hint" id="bounds-hint">Upload a file to see valid row bounds.</p>
+          <div id="working-hint" class="banner" hidden></div>
+          <div id="missing-cols" class="banner" hidden></div>
+          <div class="range-actions">
+            <button type="button" class="glass-btn primary wide" id="btn-start" disabled>Start matching</button>
+            <button type="button" class="glass-btn ghost sm" id="btn-reset-working" hidden title="Discard saved row updates for this upload">Reset saved updates</button>
+          </div>
+        </article>
+      </div>
+
+      <article class="panel glass" id="progress-card" hidden>
+        <div class="panel-head">
+          <h2>Live progress</h2>
+          <span class="pill" id="job-status">—</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="bar-fill"></div>
+        </div>
+        <div class="progress-line">
+          <p id="progress-msg" class="meta">Waiting…</p>
+          <p class="row-chip" id="row-live" hidden>Row <strong id="row-live-num">—</strong></p>
+        </div>
+        <div class="counters" id="counters"></div>
+        <div class="log glass-inset" id="event-log" role="log"></div>
+      </article>
+
+      <!-- Always visible result dock once job completes -->
+      <article class="panel glass result-dock" id="result-card" hidden>
+        <div class="result-hero">
+          <div>
+            <p class="kicker ok">Ready</p>
+            <h2>Your matched workbook</h2>
+            <p class="sub" id="result-summary">Preview the filled rows, then download the Excel file.</p>
+          </div>
+          <div class="result-actions">
+            <button type="button" class="glass-btn ghost" id="btn-preview">Preview sheet</button>
+            <a class="glass-btn primary" id="btn-download" href="#" download>Download Excel</a>
+          </div>
+        </div>
+        <div id="preview-wrap" class="table-wrap" hidden>
+          <div class="table-toolbar">
+            <span id="preview-label">Matched rows</span>
+            <button type="button" class="glass-btn ghost sm" id="btn-preview-refresh">Refresh preview</button>
+          </div>
+          <table id="preview-table"></table>
+        </div>
+      </article>
+    </section>
+
+    <!-- SOURCES -->
+    <section id="view-sources" class="view">
+      <div class="hero glass compact">
+        <div>
+          <p class="kicker">Catalogues</p>
+          <h1>Sitemap sources</h1>
+          <p class="sub">Built-in BigW / Kogan caches, or crawl a custom retailer sitemap.</p>
+        </div>
+      </div>
+      <div class="two-col">
+        <article class="panel glass">
+          <h2>Add custom sitemap</h2>
+          <label class="field">Display name
+            <input id="src-name" placeholder="e.g. My Retailer AU" />
+          </label>
+          <label class="field">Sitemap index URL
+            <input id="src-url" placeholder="https://example.com/sitemap.xml" />
+          </label>
+          <label class="field">Product URL regex <span class="opt">(optional)</span>
+            <input id="src-pattern" placeholder="/product/|/au/buy/" />
+          </label>
+          <p class="hint">Leave empty to auto-detect common product URL patterns.</p>
+          <button type="button" class="glass-btn primary" id="btn-crawl">Crawl &amp; store</button>
+          <div id="crawl-status" class="meta"></div>
+        </article>
+        <article class="panel glass">
+          <div class="panel-head"><h2>Stored catalogues</h2></div>
+          <div id="sources-list" class="job-list"></div>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    During Days · brand + variant matching against sitemap URL catalogues
+  </footer>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+requests
+lxml
+openpyxl
+rapidfuzz
+httpx
+curl_cffi
+selenium
+fastapi
+uvicorn[standard]
+python-multipart

@@ -1,0 +1,24 @@
+services:
+  url-matcher:
+    build: .
+    ports:
+      - "${PORT:-8787}:${PORT:-8787}"
+    environment:
+      PORT: ${PORT:-8787}
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - matcher-cache:/app/cache
+      - matcher-uploads:/app/uploads
+      - matcher-outputs:/app/outputs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  matcher-cache:
+  matcher-uploads:
+  matcher-outputs:

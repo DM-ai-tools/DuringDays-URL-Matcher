@@ -28,4 +28,4 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/api/health" || exit 1
 
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8787} --proxy-headers --forwarded-allow-ips '${FORWARDED_ALLOW_IPS:-*}'"]
+CMD ["python", "serve.py"]

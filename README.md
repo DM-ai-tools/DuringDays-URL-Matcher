@@ -88,6 +88,8 @@ Or without Docker:
 $env:PORT="8787"; python serve.py
 ```
 
+Railway / Docker both use `python serve.py`, which reads `PORT` from the environment (no shell variable expansion needed).
+
 ## Staged recipe
 
 1. **Stage 1 – sitemaps** (biggest unknown):  

@@ -478,11 +478,24 @@ $("#btn-bulk-preview")?.addEventListener("click", async () => {
         product_pattern: $("#bulk-pattern").value.trim() || null,
       }),
     });
-    $("#bulk-status").textContent = `Preview: ${fmtNum(data.unique)} unique product URLs`;
+    $("#bulk-status").textContent = `Preview: ${fmtNum(data.unique)} product URLs` +
+      (data.brand_count ? `, ${fmtNum(data.brand_count)} brands` : "");
     const box = $("#bulk-preview");
     box.hidden = false;
+    const filtered = data.filtered || {};
+    const filteredParts = [];
+    if (filtered.categories) filteredParts.push(`${fmtNum(filtered.categories)} categories`);
+    if (filtered.brand_categories) filteredParts.push(`${fmtNum(filtered.brand_categories)} brand-categories`);
+    if (filtered.collections) filteredParts.push(`${fmtNum(filtered.collections)} collections`);
+    if (filtered.brand_pages) filteredParts.push(`${fmtNum(filtered.brand_pages)} brand pages`);
+    const filteredLine = filteredParts.length
+      ? `<p class="hint">${filteredParts.join(" · ")} filtered out (not stored as products)</p>`
+      : "";
     box.innerHTML = `<strong>${fmtNum(data.unique)}</strong> unique product URLs cleaned
-      ${data.samples?.length ? `<ol>${data.samples.map((u) => `<li>${escapeHtml(u)}</li>`).join("")}</ol>` : ""}`;
+      ${data.brand_count ? `<br><strong>${fmtNum(data.brand_count)}</strong> brand slugs extracted` : ""}
+      ${filteredLine}
+      ${data.samples?.length ? `<ol>${data.samples.map((u) => `<li>${escapeHtml(u)}</li>`).join("")}</ol>` : ""}
+      ${data.brand_samples?.length ? `<p>Brand samples: ${data.brand_samples.map((b) => `<code>${escapeHtml(b)}</code>`).join(", ")}</p>` : ""}`;
   } catch (err) {
     alert(err.message);
   }

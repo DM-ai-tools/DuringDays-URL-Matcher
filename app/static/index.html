@@ -177,8 +177,8 @@
       <article class="panel glass" id="bulk-panel">
         <h2>Bulk upload product URLs</h2>
         <p class="hint" style="margin-top:0">
-          Paste messy sitemap dumps (Kogan pages often concatenate product URL + date + image URL).
-          The app cleans them to <code>/au/buy/…</code> product links, stores them, and uses the existing matcher.
+          Paste messy Kogan sitemap dumps (products, brands, brand-categories, categories, collections).
+          Product URLs (<code>/au/buy/…</code>) are stored for matching; brand slugs are extracted and saved separately.
         </p>
         <div class="grid-2">
           <label class="field">Catalogue target
@@ -202,7 +202,7 @@
           </label>
         </div>
         <label class="field">Paste URL dump
-          <textarea id="bulk-text" rows="8" placeholder="Paste from sitemap page or a list of https://www.kogan.com/au/buy/... URLs"></textarea>
+          <textarea id="bulk-text" rows="8" placeholder="Paste from sitemap pages: marketplace products, brands, brand-categories, categories…"></textarea>
         </label>
         <label class="field">Or upload a file (.txt / .xml / .csv)
           <input type="file" id="bulk-file" accept=".txt,.xml,.csv,.json,.html,text/plain" />

@@ -373,7 +373,10 @@ def bulk_preview(req: BulkPreviewRequest):
     return {
         "unique": result["unique"],
         "extracted": result["extracted"],
+        "brand_count": result.get("brand_count", 0),
+        "filtered": result.get("filtered", {}),
         "samples": result["samples"],
+        "brand_samples": result.get("brand_samples", []),
         "rejected_samples": result["rejected_samples"],
     }
 
@@ -412,7 +415,13 @@ def bulk_ingest(req: BulkIngestRequest):
                 progress=100,
                 message=(
                     f"Stored {result.get('product_urls', 0):,} URLs "
-                    f"(+{result.get('added', 0):,} new) as '{result.get('id')}'"
+                    f"(+{result.get('added', 0):,} new)"
+                    + (
+                        f", {result.get('brands_total', 0):,} brands"
+                        if result.get("brands_from_upload")
+                        else ""
+                    )
+                    + f" as '{result.get('id')}'"
                 ),
                 meta={**job.meta, **result},
                 counters={
@@ -488,7 +497,13 @@ async def bulk_upload(
                 progress=100,
                 message=(
                     f"Stored {result.get('product_urls', 0):,} URLs "
-                    f"(+{result.get('added', 0):,} new) as '{result.get('id')}'"
+                    f"(+{result.get('added', 0):,} new)"
+                    + (
+                        f", {result.get('brands_total', 0):,} brands"
+                        if result.get("brands_from_upload")
+                        else ""
+                    )
+                    + f" as '{result.get('id')}'"
                 ),
                 meta={**job.meta, **result},
                 counters={

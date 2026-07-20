@@ -14,11 +14,11 @@ from urllib.parse import urlparse
 from lxml import etree
 
 from config import CACHE_DIR, HEADERS, ROOT, STOPWORDS
+from app.cleaned_data import kogan_cleaned_summary, load_kogan_brands, merge_kogan_cleaned
 
 CUSTOM_DIR = CACHE_DIR / "custom"
 CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
 REGISTRY = CUSTOM_DIR / "registry.json"
-KOGAN_BRANDS_PATH = CACHE_DIR / "kogan_brands.json"
 
 
 def _load_registry() -> dict:
@@ -48,7 +48,7 @@ def list_sources() -> list[dict]:
             "index_url": "https://www.kogan.com/sitemap.xml",
             "builtin": True,
             "product_urls": _count_urls(CACHE_DIR / "kogan_urls.json"),
-            "brand_count": len(load_kogan_brands()),
+            "cleaned_data": kogan_cleaned_summary()["counts"],
         },
     ]
     for sid, meta in reg.get("sources", {}).items():
@@ -357,30 +357,6 @@ def _persist_custom_urls(
     return reg["sources"][source_id] | {"id": source_id, "builtin": False}
 
 
-def load_kogan_brands() -> list[str]:
-    if not KOGAN_BRANDS_PATH.exists():
-        return []
-    try:
-        data = json.loads(KOGAN_BRANDS_PATH.read_text(encoding="utf-8"))
-        return list(data.get("brands") or [])
-    except Exception:
-        return []
-
-
-def save_kogan_brands(brands: list[str], *, merge: bool = True) -> dict:
-    """Persist Kogan brand slugs extracted from bulk sitemap dumps."""
-    KOGAN_BRANDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    existing = set(load_kogan_brands()) if merge else set()
-    merged = sorted(existing | {b.lower().strip() for b in brands if b and b.strip()})
-    payload = {
-        "fetched_at": datetime.now(timezone.utc).isoformat(),
-        "brands": merged,
-        "count": len(merged),
-    }
-    KOGAN_BRANDS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return payload
-
-
 def ingest_bulk_urls(
     name: str,
     raw_text: str,
@@ -414,17 +390,25 @@ def ingest_bulk_urls(
     new_urls = extracted["urls"]
     brands = extracted.get("brands") or []
     filtered = extracted.get("filtered") or {}
+    cleaned_incoming = {
+        "brands": brands,
+        "categories": extracted.get("categories") or [],
+        "brand_categories": extracted.get("brand_categories") or [],
+        "collections": extracted.get("collections") or [],
+        "brand_pages": extracted.get("brand_pages") or [],
+    }
+    has_cleaned = any(cleaned_incoming[k] for k in cleaned_incoming if k != "brands") or brands
     if progress_cb:
         msg = f"Found {len(new_urls):,} product URLs"
         if brands:
             msg += f", {len(brands):,} brands"
         if any(filtered.values()):
-            msg += f" ({sum(filtered.values()):,} category/collection rows filtered)"
+            msg += f" ({sum(filtered.values()):,} non-product rows parsed)"
         progress_cb(msg, 25)
 
-    if not new_urls and not brands:
+    if not new_urls and not has_cleaned:
         raise ValueError(
-            "No product URLs or brands found after cleaning. "
+            "No product URLs or cleaned sitemap data found after cleaning. "
             "Paste Kogan sitemap dumps (/au/buy/, /au/{brand}/, brand-category URLs), "
             "BigW /product/.../p/… links, or set a product URL regex."
         )
@@ -474,11 +458,21 @@ def ingest_bulk_urls(
         }
 
     brand_result: dict | None = None
-    if brands and target == "kogan":
-        brand_result = save_kogan_brands(brands, merge=merge)
+    cleaned_result: dict | None = None
+    if has_cleaned and target == "kogan":
+        cleaned_result = merge_kogan_cleaned(cleaned_incoming, merge=merge)
+        brand_result = {
+            "count": len(cleaned_result.get("brands") or []),
+            "brands": cleaned_result.get("brands") or [],
+            "fetched_at": cleaned_result.get("fetched_at"),
+        }
         if progress_cb:
+            counts = kogan_cleaned_summary()["counts"]
             progress_cb(
-                f"Stored {brand_result['count']:,} Kogan brands (+{len(brands):,} from upload)",
+                f"Stored cleaned data: {counts['brands']:,} brands, "
+                f"{counts['categories']:,} categories, "
+                f"{counts['brand_categories']:,} brand-categories, "
+                f"{counts['collections']:,} collections",
                 90,
             )
 
@@ -498,6 +492,14 @@ def ingest_bulk_urls(
         "merged": merge,
         "brands_from_upload": len(brands),
         "brands_total": brand_result["count"] if brand_result else len(load_kogan_brands()),
+        "cleaned_data": kogan_cleaned_summary()["counts"] if target == "kogan" else None,
+        "cleaned_from_upload": {
+            "brands": len(brands),
+            "categories": len(cleaned_incoming["categories"]),
+            "brand_categories": len(cleaned_incoming["brand_categories"]),
+            "collections": len(cleaned_incoming["collections"]),
+            "brand_pages": len(cleaned_incoming["brand_pages"]),
+        },
         "filtered": filtered,
         "samples": extracted["samples"],
         "brand_samples": extracted.get("brand_samples", []),

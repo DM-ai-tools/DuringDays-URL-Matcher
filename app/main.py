@@ -17,8 +17,9 @@ from pydantic import BaseModel, Field
 from app.excel_io import inspect_workbook, preview_rows, row_bounds
 from app.job_store import store
 from app.match_runner import run_match_job
+from app.cleaned_data import browse_kogan_cleaned, kogan_cleaned_summary
 from app.sitemap_custom import crawl_custom_sitemap, list_sources, ingest_bulk_urls
-from app.url_bulk import extract_product_urls
+from app.url_bulk import extract_bulk_catalogue, extract_product_urls
 from app.workbook_store import has_working_copy, prepare_working, file_job_lock, working_path
 from config import ROOT
 
@@ -362,6 +363,26 @@ def sources():
     return {"sources": list_sources()}
 
 
+@app.get("/api/sources/kogan/cleaned-data")
+def kogan_cleaned_data_summary():
+    """Counts of stored cleaned Kogan sitemap data."""
+    return kogan_cleaned_summary()
+
+
+@app.get("/api/sources/kogan/cleaned-data/{data_type}")
+def kogan_cleaned_data_browse(
+    data_type: str,
+    offset: int = 0,
+    limit: int = 50,
+    q: str = "",
+):
+    """Paginated browse of stored cleaned data (products, brands, categories, etc.)."""
+    try:
+        return browse_kogan_cleaned(data_type, offset=offset, limit=limit, q=q)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/sources/bulk/preview")
 def bulk_preview(req: BulkPreviewRequest):
     """Clean a paste dump and return counts/samples without storing."""
@@ -375,6 +396,13 @@ def bulk_preview(req: BulkPreviewRequest):
         "extracted": result["extracted"],
         "brand_count": result.get("brand_count", 0),
         "filtered": result.get("filtered", {}),
+        "cleaned_counts": {
+            "brands": result.get("brand_count", 0),
+            "categories": len(result.get("categories") or []),
+            "brand_categories": len(result.get("brand_categories") or []),
+            "collections": len(result.get("collections") or []),
+            "brand_pages": len(result.get("brand_pages") or []),
+        },
         "samples": result["samples"],
         "brand_samples": result.get("brand_samples", []),
         "rejected_samples": result["rejected_samples"],

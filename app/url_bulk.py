@@ -199,6 +199,10 @@ def extract_bulk_catalogue(
         return {
             "urls": [],
             "brands": [],
+            "categories": [],
+            "brand_categories": [],
+            "collections": [],
+            "brand_pages": [],
             "extracted": 0,
             "unique": 0,
             "brand_count": 0,
@@ -214,8 +218,16 @@ def extract_bulk_catalogue(
     candidates = _collect_candidates(raw)
     products: list[str] = []
     brands: set[str] = set()
+    categories: list[str] = []
+    brand_categories: list[dict] = []
+    collections: list[str] = []
+    brand_pages: list[str] = []
     seen_products: set[str] = set()
     seen_norm: set[str] = set()
+    seen_categories: set[str] = set()
+    seen_brand_categories: set[str] = set()
+    seen_collections: set[str] = set()
+    seen_brand_pages: set[str] = set()
     rejected: list[str] = []
     filtered: dict[str, int] = {
         "categories": 0,
@@ -247,12 +259,24 @@ def extract_bulk_catalogue(
                 continue
             if kind == "category":
                 filtered["categories"] += 1
+                if norm not in seen_categories:
+                    seen_categories.add(norm)
+                    categories.append(norm)
             elif kind == "brand_category":
                 filtered["brand_categories"] += 1
+                if norm not in seen_brand_categories:
+                    seen_brand_categories.add(norm)
+                    brand_categories.append({"brand": brand_slug or "", "url": norm})
             elif kind == "collection":
                 filtered["collections"] += 1
+                if norm not in seen_collections:
+                    seen_collections.add(norm)
+                    collections.append(norm)
             elif kind == "brand":
                 filtered["brand_pages"] += 1
+                if norm not in seen_brand_pages:
+                    seen_brand_pages.add(norm)
+                    brand_pages.append(norm)
             else:
                 filtered["other"] += 1
             continue
@@ -269,6 +293,10 @@ def extract_bulk_catalogue(
     return {
         "urls": products,
         "brands": brand_list,
+        "categories": categories,
+        "brand_categories": brand_categories,
+        "collections": collections,
+        "brand_pages": brand_pages,
         "extracted": len(seen_norm),
         "unique": len(products),
         "brand_count": len(brand_list),
@@ -289,6 +317,10 @@ def extract_product_urls(
     return {
         "urls": result["urls"],
         "brands": result.get("brands", []),
+        "categories": result.get("categories", []),
+        "brand_categories": result.get("brand_categories", []),
+        "collections": result.get("collections", []),
+        "brand_pages": result.get("brand_pages", []),
         "extracted": result["extracted"],
         "unique": result["unique"],
         "brand_count": result.get("brand_count", 0),

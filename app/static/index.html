@@ -178,7 +178,7 @@
         <h2>Bulk upload product URLs</h2>
         <p class="hint" style="margin-top:0">
           Paste messy Kogan sitemap dumps (products, brands, brand-categories, categories, collections).
-          Product URLs (<code>/au/buy/…</code>) are stored for matching; brand slugs are extracted and saved separately.
+          Product URLs (<code>/au/buy/…</code>) are stored for matching; brands, categories, collections, and brand-categories are saved separately and browsable below.
         </p>
         <div class="grid-2">
           <label class="field">Catalogue target
@@ -213,6 +213,39 @@
         </div>
         <div id="bulk-status" class="meta"></div>
         <div id="bulk-preview" class="bulk-preview" hidden></div>
+      </article>
+
+      <article class="panel glass" id="stored-data-panel">
+        <div class="panel-head">
+          <h2>Stored cleaned data</h2>
+          <button type="button" class="glass-btn ghost sm" id="btn-stored-refresh">Refresh</button>
+        </div>
+        <p class="hint" style="margin-top:0">
+          Browse Kogan data saved from bulk uploads — products, brands, categories, brand-categories, and collections.
+        </p>
+        <div class="stored-stats" id="stored-stats"></div>
+        <div class="stored-toolbar">
+          <div class="stored-tabs" id="stored-tabs" role="tablist">
+            <button type="button" class="stored-tab active" data-type="products">Products</button>
+            <button type="button" class="stored-tab" data-type="brands">Brands</button>
+            <button type="button" class="stored-tab" data-type="categories">Categories</button>
+            <button type="button" class="stored-tab" data-type="brand_categories">Brand categories</button>
+            <button type="button" class="stored-tab" data-type="collections">Collections</button>
+            <button type="button" class="stored-tab" data-type="brand_pages">Brand pages</button>
+          </div>
+          <label class="field stored-search">
+            <input id="stored-search" placeholder="Search…" />
+          </label>
+        </div>
+        <div id="stored-meta" class="meta"></div>
+        <div class="table-wrap stored-table-wrap">
+          <table id="stored-table" class="stored-table"></table>
+        </div>
+        <div class="stored-pager">
+          <button type="button" class="glass-btn ghost sm" id="stored-prev" disabled>Previous</button>
+          <span id="stored-page-info" class="meta">—</span>
+          <button type="button" class="glass-btn ghost sm" id="stored-next" disabled>Next</button>
+        </div>
       </article>
     </section>
   </main>

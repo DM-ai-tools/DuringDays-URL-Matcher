@@ -111,13 +111,18 @@ async function fillSourcesSelect(sources) {
 function renderSourcesList(sources) {
   $("#sources-list").innerHTML =
     sources
-      .map(
-        (s) => `<div class="item">
+      .map((s) => {
+        const cleaned = s.cleaned_data;
+        const cleanedLine = cleaned
+          ? `<small>${fmtNum(cleaned.brands)} brands · ${fmtNum(cleaned.categories)} categories · ${fmtNum(cleaned.collections)} collections</small>`
+          : "";
+        return `<div class="item">
       <div><b>${escapeHtml(s.name || s.id)}${s.builtin ? " · built-in" : ""}</b>
-      <small>${escapeHtml(s.index_url || "")}</small></div>
+      <small>${escapeHtml(s.index_url || "")}</small>
+      ${cleanedLine}</div>
       <span class="pill">${fmtNum(s.product_urls)} URLs</span>
-    </div>`
-      )
+    </div>`;
+      })
       .join("") || `<p class="empty">Crawl a sitemap to add one.</p>`;
 }
 
@@ -443,6 +448,7 @@ function watchCrawl(jobId, statusSel = "#crawl-status") {
     if (data.final) {
       es.close();
       loadDashboard().catch(console.error);
+      loadStoredData().catch(console.error);
       if (data.status === "error") alert(data.error || "Job failed");
     }
   };
@@ -482,18 +488,19 @@ $("#btn-bulk-preview")?.addEventListener("click", async () => {
       (data.brand_count ? `, ${fmtNum(data.brand_count)} brands` : "");
     const box = $("#bulk-preview");
     box.hidden = false;
-    const filtered = data.filtered || {};
-    const filteredParts = [];
-    if (filtered.categories) filteredParts.push(`${fmtNum(filtered.categories)} categories`);
-    if (filtered.brand_categories) filteredParts.push(`${fmtNum(filtered.brand_categories)} brand-categories`);
-    if (filtered.collections) filteredParts.push(`${fmtNum(filtered.collections)} collections`);
-    if (filtered.brand_pages) filteredParts.push(`${fmtNum(filtered.brand_pages)} brand pages`);
-    const filteredLine = filteredParts.length
-      ? `<p class="hint">${filteredParts.join(" · ")} filtered out (not stored as products)</p>`
+    const cleaned = data.cleaned_counts || {};
+    const cleanedParts = [];
+    if (cleaned.brands) cleanedParts.push(`${fmtNum(cleaned.brands)} brands`);
+    if (cleaned.categories) cleanedParts.push(`${fmtNum(cleaned.categories)} categories`);
+    if (cleaned.brand_categories) cleanedParts.push(`${fmtNum(cleaned.brand_categories)} brand-categories`);
+    if (cleaned.collections) cleanedParts.push(`${fmtNum(cleaned.collections)} collections`);
+    if (cleaned.brand_pages) cleanedParts.push(`${fmtNum(cleaned.brand_pages)} brand pages`);
+    const cleanedLine = cleanedParts.length
+      ? `<p class="hint">Will store: ${cleanedParts.join(" · ")}</p>`
       : "";
     box.innerHTML = `<strong>${fmtNum(data.unique)}</strong> unique product URLs cleaned
       ${data.brand_count ? `<br><strong>${fmtNum(data.brand_count)}</strong> brand slugs extracted` : ""}
-      ${filteredLine}
+      ${cleanedLine}
       ${data.samples?.length ? `<ol>${data.samples.map((u) => `<li>${escapeHtml(u)}</li>`).join("")}</ol>` : ""}
       ${data.brand_samples?.length ? `<p>Brand samples: ${data.brand_samples.map((b) => `<code>${escapeHtml(b)}</code>`).join(", ")}</p>` : ""}`;
   } catch (err) {
@@ -551,6 +558,121 @@ $("#bulk-file")?.addEventListener("change", async (e) => {
 
 $("#refresh-dash").addEventListener("click", () => loadDashboard().catch(alert));
 
+const storedState = { type: "products", offset: 0, limit: 50, q: "", total: 0 };
+
+const STORED_LABELS = {
+  products: "Products",
+  brands: "Brands",
+  categories: "Categories",
+  brand_categories: "Brand categories",
+  collections: "Collections",
+  brand_pages: "Brand pages",
+};
+
+function renderStoredStats(counts) {
+  const el = $("#stored-stats");
+  if (!el || !counts) return;
+  el.innerHTML = Object.entries(STORED_LABELS)
+    .map(([key, label]) => `<span class="stored-stat"><b>${fmtNum(counts[key] || 0)}</b>${label}</span>`)
+    .join("");
+}
+
+function renderStoredTable(type, items) {
+  const table = $("#stored-table");
+  if (!table) return;
+  if (!items.length) {
+    table.innerHTML = `<tbody><tr><td class="empty">No ${escapeHtml(STORED_LABELS[type] || type).toLowerCase()} stored yet.</td></tr></tbody>`;
+    return;
+  }
+  if (type === "brand_categories") {
+    table.innerHTML = `<thead><tr><th>Brand</th><th>URL</th></tr></thead><tbody>${items
+      .map(
+        (row) => `<tr>
+          <td><code>${escapeHtml(row.brand || "—")}</code></td>
+          <td><a href="${escapeHtml(row.url)}" target="_blank" rel="noopener">${escapeHtml(row.url)}</a></td>
+        </tr>`
+      )
+      .join("")}</tbody>`;
+    return;
+  }
+  if (type === "brands") {
+    table.innerHTML = `<thead><tr><th>Brand slug</th><th>Page</th></tr></thead><tbody>${items
+      .map(
+        (slug) => `<tr>
+          <td><code>${escapeHtml(slug)}</code></td>
+          <td><a href="https://www.kogan.com/au/${encodeURIComponent(slug)}/" target="_blank" rel="noopener">kogan.com/au/${escapeHtml(slug)}/</a></td>
+        </tr>`
+      )
+      .join("")}</tbody>`;
+    return;
+  }
+  table.innerHTML = `<thead><tr><th>URL</th></tr></thead><tbody>${items
+    .map((url) => `<tr><td><a href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></td></tr>`)
+    .join("")}</tbody>`;
+}
+
+async function loadStoredBrowse() {
+  const params = new URLSearchParams({
+    offset: String(storedState.offset),
+    limit: String(storedState.limit),
+  });
+  if (storedState.q) params.set("q", storedState.q);
+  const data = await api(`/api/sources/kogan/cleaned-data/${storedState.type}?${params}`);
+  storedState.total = data.total || 0;
+  renderStoredTable(storedState.type, data.items || []);
+  const from = storedState.total ? storedState.offset + 1 : 0;
+  const to = Math.min(storedState.offset + storedState.limit, storedState.total);
+  $("#stored-meta").textContent = `${fmtNum(storedState.total)} ${STORED_LABELS[storedState.type] || storedState.type}`;
+  $("#stored-page-info").textContent =
+    storedState.total ? `Showing ${from}–${to} of ${fmtNum(storedState.total)}` : "No items";
+  $("#stored-prev").disabled = storedState.offset <= 0;
+  $("#stored-next").disabled = storedState.offset + storedState.limit >= storedState.total;
+}
+
+async function loadStoredData() {
+  if (!$("#stored-data-panel")) return;
+  const summary = await api("/api/sources/kogan/cleaned-data");
+  renderStoredStats(summary.counts || {});
+  await loadStoredBrowse();
+}
+
+$$(".stored-tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    $$(".stored-tab").forEach((b) => b.classList.toggle("active", b === btn));
+    storedState.type = btn.dataset.type;
+    storedState.offset = 0;
+    loadStoredBrowse().catch(alert);
+  });
+});
+
+let storedSearchTimer;
+$("#stored-search")?.addEventListener("input", () => {
+  clearTimeout(storedSearchTimer);
+  storedSearchTimer = setTimeout(() => {
+    storedState.q = $("#stored-search").value.trim();
+    storedState.offset = 0;
+    loadStoredBrowse().catch(console.error);
+  }, 300);
+});
+
+$("#stored-prev")?.addEventListener("click", () => {
+  storedState.offset = Math.max(0, storedState.offset - storedState.limit);
+  loadStoredBrowse().catch(alert);
+});
+$("#stored-next")?.addEventListener("click", () => {
+  if (storedState.offset + storedState.limit < storedState.total) {
+    storedState.offset += storedState.limit;
+    loadStoredBrowse().catch(alert);
+  }
+});
+$("#btn-stored-refresh")?.addEventListener("click", () => loadStoredData().catch(alert));
+
+$$(".tab").forEach((t) => {
+  t.addEventListener("click", () => {
+    if (t.dataset.view === "sources") loadStoredData().catch(console.error);
+  });
+});
+
 $("#btn-reset-working")?.addEventListener("click", async () => {
   if (!state.fileId) return;
   if (!confirm("Discard all saved row updates for this upload and start fresh?")) return;
@@ -565,3 +687,4 @@ $("#btn-reset-working")?.addEventListener("click", async () => {
 });
 
 loadDashboard().catch(console.error);
+loadStoredData().catch(console.error);

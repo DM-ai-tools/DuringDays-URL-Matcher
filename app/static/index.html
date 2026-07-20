@@ -149,7 +149,7 @@
         <div>
           <p class="kicker">Catalogues</p>
           <h1>Sitemap sources</h1>
-          <p class="sub">Built-in BigW / Kogan caches, or crawl a custom retailer sitemap.</p>
+          <p class="sub">Crawl a sitemap, or paste / upload competitor product URLs in bulk for matching.</p>
         </div>
       </div>
       <div class="two-col">
@@ -173,6 +173,47 @@
           <div id="sources-list" class="job-list"></div>
         </article>
       </div>
+
+      <article class="panel glass" id="bulk-panel">
+        <h2>Bulk upload product URLs</h2>
+        <p class="hint" style="margin-top:0">
+          Paste messy sitemap dumps (Kogan pages often concatenate product URL + date + image URL).
+          The app cleans them to <code>/au/buy/…</code> product links, stores them, and uses the existing matcher.
+        </p>
+        <div class="grid-2">
+          <label class="field">Catalogue target
+            <select id="bulk-target">
+              <option value="kogan">Kogan (built-in)</option>
+              <option value="bigw">BigW (built-in)</option>
+              <option value="custom">Custom catalogue…</option>
+            </select>
+          </label>
+          <label class="field" id="bulk-custom-wrap" hidden>Custom name
+            <input id="bulk-custom-name" placeholder="e.g. Kogan Marketplace" />
+          </label>
+          <label class="field">Mode
+            <select id="bulk-merge">
+              <option value="true">Merge with existing URLs</option>
+              <option value="false">Replace catalogue</option>
+            </select>
+          </label>
+          <label class="field">Product URL regex <span class="opt">(optional)</span>
+            <input id="bulk-pattern" placeholder="leave empty for auto (Kogan /au/buy/)" />
+          </label>
+        </div>
+        <label class="field">Paste URL dump
+          <textarea id="bulk-text" rows="8" placeholder="Paste from sitemap page or a list of https://www.kogan.com/au/buy/... URLs"></textarea>
+        </label>
+        <label class="field">Or upload a file (.txt / .xml / .csv)
+          <input type="file" id="bulk-file" accept=".txt,.xml,.csv,.json,.html,text/plain" />
+        </label>
+        <div class="result-actions" style="margin-top:0.5rem">
+          <button type="button" class="glass-btn ghost" id="btn-bulk-preview">Preview clean</button>
+          <button type="button" class="glass-btn primary" id="btn-bulk-store">Clean &amp; store</button>
+        </div>
+        <div id="bulk-status" class="meta"></div>
+        <div id="bulk-preview" class="bulk-preview" hidden></div>
+      </article>
     </section>
   </main>
 

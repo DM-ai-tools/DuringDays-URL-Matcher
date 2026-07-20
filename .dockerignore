@@ -2,7 +2,8 @@
 .gitignore
 .venv
 venv
-__pycache__
+__pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -25,7 +26,7 @@ data/
 .DS_Store
 Thumbs.db
 
-# Docs / dev-only
+# Docs / local smoke helpers
 README.md
 _smoke_*.py
 *.md

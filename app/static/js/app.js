@@ -429,24 +429,112 @@ $("#btn-crawl").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, index_url, product_pattern }),
     });
-    watchCrawl(res.job_id);
+    watchCrawl(res.job_id, "#crawl-status");
   } catch (err) {
     alert(err.message);
   }
 });
 
-function watchCrawl(jobId) {
+function watchCrawl(jobId, statusSel = "#crawl-status") {
   const es = new EventSource(`/api/jobs/${jobId}/events`);
   es.onmessage = (ev) => {
     const data = JSON.parse(ev.data);
-    if (data.message) $("#crawl-status").textContent = data.message;
+    if (data.message) $(statusSel).textContent = data.message;
     if (data.final) {
       es.close();
       loadDashboard().catch(console.error);
-      if (data.status === "error") alert(data.error || "Crawl failed");
+      if (data.status === "error") alert(data.error || "Job failed");
     }
   };
 }
+
+function bulkTargetName() {
+  const t = $("#bulk-target").value;
+  if (t === "custom") {
+    const n = $("#bulk-custom-name").value.trim();
+    if (!n) throw new Error("Enter a custom catalogue name");
+    return n;
+  }
+  return t;
+}
+
+$("#bulk-target")?.addEventListener("change", () => {
+  const custom = $("#bulk-target").value === "custom";
+  $("#bulk-custom-wrap").hidden = !custom;
+});
+
+$("#btn-bulk-preview")?.addEventListener("click", async () => {
+  try {
+    const text = $("#bulk-text").value;
+    if (!text.trim()) return alert("Paste a URL dump first (or upload a file into the text area)");
+    const name = bulkTargetName();
+    $("#bulk-status").textContent = "Cleaning preview…";
+    const data = await api("/api/sources/bulk/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        name,
+        product_pattern: $("#bulk-pattern").value.trim() || null,
+      }),
+    });
+    $("#bulk-status").textContent = `Preview: ${fmtNum(data.unique)} unique product URLs`;
+    const box = $("#bulk-preview");
+    box.hidden = false;
+    box.innerHTML = `<strong>${fmtNum(data.unique)}</strong> unique product URLs cleaned
+      ${data.samples?.length ? `<ol>${data.samples.map((u) => `<li>${escapeHtml(u)}</li>`).join("")}</ol>` : ""}`;
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+$("#btn-bulk-store")?.addEventListener("click", async () => {
+  try {
+    const name = bulkTargetName();
+    const merge = $("#bulk-merge").value !== "false";
+    const product_pattern = $("#bulk-pattern").value.trim() || null;
+    const file = $("#bulk-file").files?.[0];
+    $("#bulk-status").textContent = "Starting clean & store…";
+    $("#bulk-preview").hidden = true;
+
+    let res;
+    if (file && !$("#bulk-text").value.trim()) {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("name", name);
+      fd.append("merge", String(merge));
+      if (product_pattern) fd.append("product_pattern", product_pattern);
+      res = await api("/api/sources/bulk/upload", { method: "POST", body: fd });
+    } else {
+      const text = $("#bulk-text").value;
+      if (!text.trim() && !file) return alert("Paste URLs or choose a file");
+      let payloadText = text;
+      if (file && !text.trim()) {
+        payloadText = await file.text();
+      }
+      res = await api("/api/sources/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: payloadText, name, merge, product_pattern }),
+      });
+    }
+    watchCrawl(res.job_id, "#bulk-status");
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+$("#bulk-file")?.addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  try {
+    const text = await f.text();
+    if (!$("#bulk-text").value.trim()) $("#bulk-text").value = text.slice(0, 500000);
+    $("#bulk-status").textContent = `Loaded ${f.name} (${fmtNum(f.size)} bytes) — preview or store`;
+  } catch (_) {
+    $("#bulk-status").textContent = `Selected ${f.name} — will upload on store`;
+  }
+});
 
 $("#refresh-dash").addEventListener("click", () => loadDashboard().catch(alert));
 

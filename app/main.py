@@ -17,7 +17,8 @@ from pydantic import BaseModel, Field
 from app.excel_io import inspect_workbook, preview_rows, row_bounds
 from app.job_store import store
 from app.match_runner import run_match_job
-from app.sitemap_custom import crawl_custom_sitemap, list_sources
+from app.sitemap_custom import crawl_custom_sitemap, list_sources, ingest_bulk_urls
+from app.url_bulk import extract_product_urls
 from app.workbook_store import has_working_copy, prepare_working, file_job_lock, working_path
 from config import ROOT
 
@@ -342,9 +343,175 @@ class SitemapRequest(BaseModel):
     product_pattern: str | None = None
 
 
+class BulkPreviewRequest(BaseModel):
+    text: str
+    name: str = "kogan"
+    product_pattern: str | None = None
+
+
+class BulkIngestRequest(BaseModel):
+    text: str
+    name: str = "kogan"
+    merge: bool = True
+    product_pattern: str | None = None
+    index_url: str | None = None
+
+
 @app.get("/api/sources")
 def sources():
     return {"sources": list_sources()}
+
+
+@app.post("/api/sources/bulk/preview")
+def bulk_preview(req: BulkPreviewRequest):
+    """Clean a paste dump and return counts/samples without storing."""
+    result = extract_product_urls(
+        req.text,
+        target=req.name,
+        product_pattern=req.product_pattern,
+    )
+    return {
+        "unique": result["unique"],
+        "extracted": result["extracted"],
+        "samples": result["samples"],
+        "rejected_samples": result["rejected_samples"],
+    }
+
+
+@app.post("/api/sources/bulk")
+def bulk_ingest(req: BulkIngestRequest):
+    """Clean + store bulk product URLs into a catalogue (builtin or custom)."""
+    if not req.text or not req.text.strip():
+        raise HTTPException(400, "Paste product URL text (or upload a file)")
+    if not req.name.strip():
+        raise HTTPException(400, "Catalogue name is required (e.g. kogan)")
+
+    job = store.create(
+        "bulk_ingest",
+        meta={"name": req.name, "merge": req.merge, "index_url": req.index_url},
+    )
+
+    def worker():
+        store.update(job.id, status="running")
+        try:
+
+            def cb(message: str, progress: float):
+                store.emit(job.id, message, progress=progress, status="running")
+
+            result = ingest_bulk_urls(
+                req.name,
+                req.text,
+                merge=req.merge,
+                product_pattern=req.product_pattern,
+                index_url=req.index_url,
+                progress_cb=cb,
+            )
+            store.update(
+                job.id,
+                status="done",
+                progress=100,
+                message=(
+                    f"Stored {result.get('product_urls', 0):,} URLs "
+                    f"(+{result.get('added', 0):,} new) as '{result.get('id')}'"
+                ),
+                meta={**job.meta, **result},
+                counters={
+                    "product_urls": result.get("product_urls", 0),
+                    "added": result.get("added", 0),
+                    "from_upload": result.get("unique_from_upload", 0),
+                },
+            )
+            store.emit(
+                job.id,
+                store.get(job.id).message if store.get(job.id) else "Done",
+                progress=100,
+                status="done",
+                counters={
+                    "product_urls": result.get("product_urls", 0),
+                    "added": result.get("added", 0),
+                },
+            )
+        except Exception as exc:
+            store.update(job.id, status="error", error=str(exc), message=str(exc))
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"job_id": job.id}
+
+
+@app.post("/api/sources/bulk/upload")
+async def bulk_upload(
+    file: UploadFile = File(...),
+    name: str = Form("kogan"),
+    merge: str = Form("true"),
+    product_pattern: str | None = Form(None),
+    index_url: str | None = Form(None),
+):
+    """Upload a .txt / .xml / .csv dump of competitor product URLs."""
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("latin-1", errors="ignore")
+
+    if not text.strip():
+        raise HTTPException(400, "Uploaded file is empty")
+
+    do_merge = str(merge).lower() not in {"0", "false", "no"}
+    job = store.create(
+        "bulk_ingest",
+        meta={
+            "name": name,
+            "merge": do_merge,
+            "filename": file.filename,
+            "index_url": index_url,
+        },
+    )
+
+    def worker():
+        store.update(job.id, status="running")
+        try:
+
+            def cb(message: str, progress: float):
+                store.emit(job.id, message, progress=progress, status="running")
+
+            result = ingest_bulk_urls(
+                name,
+                text,
+                merge=do_merge,
+                product_pattern=product_pattern or None,
+                index_url=index_url or None,
+                progress_cb=cb,
+            )
+            store.update(
+                job.id,
+                status="done",
+                progress=100,
+                message=(
+                    f"Stored {result.get('product_urls', 0):,} URLs "
+                    f"(+{result.get('added', 0):,} new) as '{result.get('id')}'"
+                ),
+                meta={**job.meta, **result},
+                counters={
+                    "product_urls": result.get("product_urls", 0),
+                    "added": result.get("added", 0),
+                    "from_upload": result.get("unique_from_upload", 0),
+                },
+            )
+            store.emit(
+                job.id,
+                store.get(job.id).message if store.get(job.id) else "Done",
+                progress=100,
+                status="done",
+                counters={
+                    "product_urls": result.get("product_urls", 0),
+                    "added": result.get("added", 0),
+                },
+            )
+        except Exception as exc:
+            store.update(job.id, status="error", error=str(exc), message=str(exc))
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"job_id": job.id}
 
 
 @app.post("/api/sources/crawl")

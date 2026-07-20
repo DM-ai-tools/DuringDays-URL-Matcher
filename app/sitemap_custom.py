@@ -271,3 +271,177 @@ def load_site_index(site_id: str) -> tuple[dict, dict]:
     with open(index_path, "rb") as f:
         data = pickle.load(f)
     return data["records"], data["inverted_index"]
+
+
+def _persist_builtin_urls(site_id: str, urls: list[str], source_label: str) -> dict:
+    """Write builtin BigW/Kogan URL cache and rebuild match index."""
+    import pickle
+
+    import sitemaps
+    from config import INDEX_CACHE, SITES
+
+    cache_path = SITES[site_id]["cache"]
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "sitemaps_parsed": 0,
+        "total_urls_seen": len(urls),
+        "product_urls": urls,
+        "index_url": SITES[site_id]["index"],
+        "name": site_id,
+        "source": source_label,
+    }
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    records, inverted = sitemaps.build_index(site_id)
+    index_data = sitemaps._load_index_cache()
+    index_data[site_id] = {
+        "url_mtime": cache_path.stat().st_mtime,
+        "records": records,
+        "inverted_index": inverted,
+    }
+    sitemaps._save_index_cache(index_data)
+
+    return {
+        "id": site_id,
+        "name": site_id.capitalize() if site_id != "bigw" else "BigW",
+        "builtin": True,
+        "product_urls": len(urls),
+        "cache": str(cache_path.relative_to(ROOT)),
+        "index": str(INDEX_CACHE.relative_to(ROOT)),
+        "fetched_at": payload["fetched_at"],
+        "source": source_label,
+    }
+
+
+def _persist_custom_urls(
+    name: str,
+    urls: list[str],
+    index_url: str | None,
+    source_label: str,
+) -> dict:
+    import pickle
+
+    source_id = _slugify(name)
+    cache_path = CUSTOM_DIR / f"{source_id}_urls.json"
+    index_path = CUSTOM_DIR / f"{source_id}_index.pkl"
+    payload = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "sitemaps_parsed": 0,
+        "total_urls_seen": len(urls),
+        "product_urls": urls,
+        "index_url": index_url or "manual-bulk-upload",
+        "name": name,
+        "source": source_label,
+    }
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    records, inverted = _build_index(urls)
+    with open(index_path, "wb") as f:
+        pickle.dump({"records": records, "inverted_index": inverted}, f)
+
+    reg = _load_registry()
+    reg.setdefault("sources", {})[source_id] = {
+        "name": name,
+        "index_url": index_url or "manual-bulk-upload",
+        "product_pattern": None,
+        "cache": str(cache_path.relative_to(ROOT)),
+        "index": str(index_path.relative_to(ROOT)),
+        "product_urls": len(urls),
+        "fetched_at": payload["fetched_at"],
+        "source": source_label,
+    }
+    _save_registry(reg)
+    return reg["sources"][source_id] | {"id": source_id, "builtin": False}
+
+
+def ingest_bulk_urls(
+    name: str,
+    raw_text: str,
+    *,
+    merge: bool = True,
+    product_pattern: str | None = None,
+    index_url: str | None = None,
+    progress_cb: Callable[[str, float], None] | None = None,
+) -> dict:
+    """
+    Clean a bulk URL dump and store it as a matchable catalogue.
+    name: 'kogan' / 'bigw' updates the built-in caches; anything else is custom.
+    """
+    from app.url_bulk import extract_product_urls
+
+    if progress_cb:
+        progress_cb("Cleaning product URLs…", 5)
+
+    target = name.strip().lower()
+    # Map display-ish names
+    if target in {"kogan.com", "kogan au"}:
+        target = "kogan"
+    if target in {"big w", "big-w", "bigw.com.au"}:
+        target = "bigw"
+
+    extracted = extract_product_urls(
+        raw_text,
+        target=target if target in ("kogan", "bigw") else name,
+        product_pattern=product_pattern,
+    )
+    new_urls = extracted["urls"]
+    if progress_cb:
+        progress_cb(f"Found {len(new_urls):,} unique product URLs", 25)
+
+    if not new_urls:
+        raise ValueError(
+            "No product URLs found after cleaning. "
+            "Paste Kogan /au/buy/ links (or BigW /product/.../p/… links), "
+            "or set a product URL regex."
+        )
+
+    existing: set[str] = set()
+    if merge:
+        if target in ("kogan", "bigw"):
+            from config import SITES
+
+            cache_path = SITES[target]["cache"]
+            if cache_path.exists():
+                existing = set(
+                    json.loads(cache_path.read_text(encoding="utf-8")).get("product_urls", [])
+                )
+        else:
+            source_id = _slugify(name)
+            cache_path = CUSTOM_DIR / f"{source_id}_urls.json"
+            if cache_path.exists():
+                existing = set(
+                    json.loads(cache_path.read_text(encoding="utf-8")).get("product_urls", [])
+                )
+
+    before = len(existing)
+    combined = sorted(existing | set(new_urls))
+    added = len(combined) - before
+
+    if progress_cb:
+        progress_cb(
+            f"{'Merging' if merge else 'Replacing'}: {len(combined):,} total "
+            f"(+{added:,} new)",
+            55,
+        )
+
+    source_label = "manual-bulk"
+    if target in ("kogan", "bigw"):
+        meta = _persist_builtin_urls(target, combined, source_label)
+    else:
+        meta = _persist_custom_urls(name, combined, index_url, source_label)
+
+    if progress_cb:
+        progress_cb(
+            f"Stored {meta['product_urls']:,} URLs in catalogue '{meta['id']}'",
+            100,
+        )
+
+    return {
+        **meta,
+        "unique_from_upload": len(new_urls),
+        "added": added,
+        "merged": merge,
+        "samples": extracted["samples"],
+        "rejected_samples": extracted["rejected_samples"],
+    }

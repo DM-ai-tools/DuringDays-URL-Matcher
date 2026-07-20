@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import html
 import re
 from urllib.parse import urlparse, urlunparse
+
+from lxml import etree
 
 # --- Kogan high-precision patterns ---
 _KOGAN_BUY = re.compile(
@@ -29,7 +32,10 @@ _BIGW_PRODUCT = re.compile(
 )
 
 _ANY_HTTP = re.compile(r"https?://[^\s<>\"'\]]+", re.I)
-_LOC_TAG = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
+_LOC_TAG = re.compile(
+    r"<(?:[\w-]+:)?loc[^>]*>\s*(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</(?:[\w-]+:)?loc>",
+    re.I | re.S,
+)
 # Split concatenated sitemap rows: .../slug/2026-07-18https://...
 _DATE_THEN_URL = re.compile(r"(?<=\d{4}-\d{2}-\d{2})(?=https?://)", re.I)
 
@@ -64,6 +70,65 @@ _SKIP_PATH_FRAGMENTS = (
     ".css",
     ".js",
 )
+
+
+def _local_tag(tag: str) -> str:
+    if not isinstance(tag, str):
+        return ""
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1]
+    if ":" in tag:
+        return tag.rsplit(":", 1)[-1]
+    return tag
+
+
+def _prepare_raw(raw: str) -> str:
+    """Normalise pasted sitemap dumps: HTML escapes, BOM, wrappers, concatenated rows."""
+    raw = raw.strip()
+    if raw.startswith("\ufeff"):
+        raw = raw[1:]
+
+    # Browser "View Source" saved as HTML, or copied escaped markup
+    if "&lt;" in raw and any(k in raw.lower() for k in ("loc", "urlset", "url>", "sitemap")):
+        raw = html.unescape(raw)
+
+    if re.search(r"<html[\s>]", raw, re.I):
+        pre = re.search(r"<pre[^>]*>(.*?)</pre>", raw, re.I | re.S)
+        if pre:
+            raw = html.unescape(pre.group(1).strip())
+
+    return _preprocess_raw(raw)
+
+
+def _extract_xml_locs(raw: str) -> list[str]:
+    """
+    Parse structured XML sitemaps (<urlset>, <loc>, namespaces, CDATA, multiline).
+    """
+    if not any(k in raw.lower() for k in ("<urlset", "<url", "<sitemapindex", "<?xml", "<loc")):
+        return []
+
+    locs: list[str] = []
+    try:
+        content = raw.encode("utf-8")
+        root = etree.fromstring(content, parser=etree.XMLParser(recover=True, huge_tree=True))
+        for el in root.iter():
+            if _local_tag(el.tag) == "loc" and el.text:
+                url = el.text.strip()
+                if url.startswith("http"):
+                    locs.append(url)
+    except Exception:
+        pass
+
+    if locs:
+        return locs
+
+    # Regex fallback when XML is malformed but still has loc blocks
+    for match in _LOC_TAG.finditer(raw):
+        url = html.unescape(match.group(1).strip())
+        url = re.sub(r"\s+", "", url)
+        if url.startswith("http"):
+            locs.append(url)
+    return locs
 
 
 def _preprocess_raw(raw: str) -> str:
@@ -168,12 +233,21 @@ def _is_product_for_target(url: str, target: str, custom_re: re.Pattern | None) 
 
 
 def _collect_candidates(raw: str) -> list[str]:
-    raw = _preprocess_raw(raw)
+    raw = _prepare_raw(raw)
     found: list[str] = []
+
+    # Structured XML sitemaps first — most accurate for <loc> blocks
+    xml_locs = _extract_xml_locs(raw)
+    if xml_locs:
+        found.extend(xml_locs)
+
     found.extend(_KOGAN_BUY.findall(raw))
     found.extend(_KOGAN_ANY.findall(raw))
     found.extend(_BIGW_PRODUCT.findall(raw))
-    found.extend(_LOC_TAG.findall(raw))
+
+    if not xml_locs:
+        found.extend(_LOC_TAG.findall(raw))
+
     for piece in re.split(r"[\s,;|]+", raw):
         if piece.startswith("http"):
             found.append(piece)
@@ -188,10 +262,12 @@ def extract_bulk_catalogue(
 ) -> dict:
     """
     Clean Kogan/BigW bulk dumps including:
+      - structured XML sitemaps (<urlset> / <loc> tags, namespaces, CDATA)
+      - concatenated browser sitemap dumps (URL + date + next URL)
       - marketplace product sitemaps (/au/buy/…)
       - brand sitemaps (/au/{brand}/…)
       - brand-category sitemaps (/au/{brand}/shop/category/…)
-      - category / collection sitemaps (filtered out of products; brands extracted)
+      - category / collection sitemaps (stored separately; brands extracted)
 
     Returns product URLs for matching plus optional Kogan brand slugs.
     """

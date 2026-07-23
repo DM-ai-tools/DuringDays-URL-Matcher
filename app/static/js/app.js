@@ -163,7 +163,11 @@ function applyBounds(info) {
   const banner = $("#missing-cols");
   if (missing.length) {
     banner.hidden = false;
-    banner.textContent = `Missing columns will be auto-added: ${missing.join(", ")}`;
+    const titleNote =
+      missing.includes("Title") && info.has_url_column
+        ? " Title will be derived from the product URL column."
+        : "";
+    banner.textContent = `Missing columns will be auto-added: ${missing.join(", ")}.${titleNote}`;
   } else {
     banner.hidden = true;
   }

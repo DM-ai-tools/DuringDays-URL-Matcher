@@ -6,13 +6,24 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 
 REQUIRED_BIGW = [
     ("BigW Name", None),
     ("BigW URL", None),
     ("BigW Match", None),
 ]
+
+# Product URL column aliases (During Days sheet often uses "URL")
+URL_HEADER_ALIASES = (
+    "url",
+    "product url",
+    "product_url",
+    "dd url",
+    "during days url",
+    "duringdays url",
+    "link",
+    "product link",
+)
 
 
 def _header_map(ws) -> dict[str, int]:
@@ -22,6 +33,32 @@ def _header_map(ws) -> dict[str, int]:
             continue
         mapping[str(cell.value).strip().lower()] = cell.column  # 1-based
     return mapping
+
+
+def _find_header_index(headers: list, *names: str) -> int | None:
+    lookup = {
+        str(h).strip().lower(): i
+        for i, h in enumerate(headers)
+        if h is not None and str(h).strip()
+    }
+    for n in names:
+        if n.lower() in lookup:
+            return lookup[n.lower()]
+    return None
+
+
+def _row_has_match_input(row, title_idx: int | None, url_idx: int | None) -> bool:
+    if title_idx is not None:
+        title = row[title_idx] if title_idx < len(row) else None
+        if title is not None and str(title).strip():
+            return True
+    if url_idx is not None:
+        url = row[url_idx] if url_idx < len(row) else None
+        if url is not None and str(url).strip().lower().startswith("http"):
+            return True
+    if title_idx is None and url_idx is None:
+        return any(c is not None and str(c).strip() for c in row)
+    return False
 
 
 def inspect_workbook(path: Path, sheet_name: str | None = None) -> dict[str, Any]:
@@ -34,21 +71,13 @@ def inspect_workbook(path: Path, sheet_name: str | None = None) -> dict[str, Any
     headers_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True))
     headers = [str(h).strip() if h is not None else "" for h in headers_row]
 
-    # Count data rows (non-empty title if Title col exists)
-    title_idx = None
-    for i, h in enumerate(headers):
-        if h.lower() == "title":
-            title_idx = i
-            break
+    title_idx = _find_header_index(headers, "title")
+    url_idx = _find_header_index(headers, *URL_HEADER_ALIASES)
 
     data_rows = 0
     sample: list[dict] = []
     for excel_row, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        if title_idx is not None:
-            title = row[title_idx] if title_idx < len(row) else None
-            if title is None or str(title).strip() == "":
-                continue
-        elif all(c is None or str(c).strip() == "" for c in row):
+        if not _row_has_match_input(row, title_idx, url_idx):
             continue
         data_rows += 1
         if len(sample) < 8:
@@ -66,6 +95,8 @@ def inspect_workbook(path: Path, sheet_name: str | None = None) -> dict[str, Any
     for name, _ in REQUIRED_BIGW:
         if name.lower() not in header_l:
             missing.append(name)
+    if title_idx is None:
+        missing.append("Title")
 
     wb.close()
     return {
@@ -75,32 +106,25 @@ def inspect_workbook(path: Path, sheet_name: str | None = None) -> dict[str, Any
         "data_rows": data_rows,
         "min_excel_row": 2,
         "max_excel_row": 1 + data_rows if data_rows else 1,
-        # Note: max_excel_row above is approximate if blank rows exist mid-sheet;
-        # use row_bounds for precise bounds.
         "missing_bigw_columns": missing,
+        "has_title_column": title_idx is not None,
+        "has_url_column": url_idx is not None,
         "sample": sample,
     }
 
 
 def row_bounds(path: Path, sheet: str) -> dict[str, int]:
-    """Return precise min/max Excel row numbers that have a Title (or any data)."""
+    """Return precise min/max Excel row numbers that have a Title and/or product URL."""
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb[sheet]
     headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
-    title_idx = None
-    for i, h in enumerate(headers):
-        if h and str(h).strip().lower() == "title":
-            title_idx = i
-            break
+    title_idx = _find_header_index(headers, "title")
+    url_idx = _find_header_index(headers, *URL_HEADER_ALIASES)
 
     first = last = None
     count = 0
     for excel_row, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-        if title_idx is not None:
-            title = row[title_idx] if title_idx < len(row) else None
-            if title is None or str(title).strip() == "":
-                continue
-        elif all(c is None or str(c).strip() == "" for c in row):
+        if not _row_has_match_input(row, title_idx, url_idx):
             continue
         if first is None:
             first = excel_row
@@ -110,6 +134,21 @@ def row_bounds(path: Path, sheet: str) -> dict[str, int]:
     if first is None:
         return {"min_row": 2, "max_row": 2, "data_rows": 0}
     return {"min_row": first, "max_row": last, "data_rows": count}
+
+
+def _place_header(ws, headers: dict[str, int], name: str) -> int:
+    """Add a header column if missing; return 1-based column index."""
+    if name.lower() in headers:
+        return headers[name.lower()]
+    for cell in ws[1]:
+        if cell.value is None:
+            cell.value = name
+            headers[name.lower()] = cell.column
+            return cell.column
+    col = ws.max_column + 1
+    ws.cell(row=1, column=col, value=name)
+    headers[name.lower()] = col
+    return col
 
 
 def ensure_bigw_columns(path: Path, sheet: str) -> list[str]:
@@ -125,24 +164,26 @@ def ensure_bigw_columns(path: Path, sheet: str) -> list[str]:
     for name, _ in REQUIRED_BIGW:
         if name.lower() in headers:
             continue
-        # Prefer empty header cell
-        placed = False
-        for cell in ws[1]:
-            if cell.value is None:
-                cell.value = name
-                headers[name.lower()] = cell.column
-                added.append(name)
-                placed = True
-                break
-        if not placed:
-            col = ws.max_column + 1
-            ws.cell(row=1, column=col, value=name)
-            headers[name.lower()] = col
-            added.append(name)
+        _place_header(ws, headers, name)
+        added.append(name)
 
     wb.save(path)
     wb.close()
     return added
+
+
+def ensure_title_column(path: Path, sheet: str) -> bool:
+    """Ensure a Title column exists. Returns True if it was newly added."""
+    wb = load_workbook(path)
+    ws = wb[sheet]
+    headers = _header_map(ws)
+    if "title" in headers:
+        wb.close()
+        return False
+    _place_header(ws, headers, "Title")
+    wb.save(path)
+    wb.close()
+    return True
 
 
 def preview_rows(
@@ -159,10 +200,12 @@ def preview_rows(
         for i, c in enumerate(next(ws.iter_rows(min_row=1, max_row=1)))
     ]
 
-    # Focus preview on useful columns
     focus_names = {
         "id",
+        "sku",
         "title",
+        "url",
+        "product url",
         "bigw name",
         "bigw url",
         "bigw match",
@@ -174,7 +217,6 @@ def preview_rows(
     focus_idx = [
         i for i, h in enumerate(headers) if h.lower() in focus_names or i < 2
     ]
-    # dedupe preserve order
     seen = set()
     focus_idx = [i for i in focus_idx if not (i in seen or seen.add(i))]
 

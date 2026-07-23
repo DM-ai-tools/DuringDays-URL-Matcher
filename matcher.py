@@ -15,7 +15,7 @@ from config import (
     W_VARIANT_ATTR,
     WRITE_PARTIAL_URL,
 )
-from product_query import ProductQuery
+from product_query import ProductQuery, pack_count_aliases, parse_pack_count_value
 
 # Bed-size hierarchy: a bare "king" must not match a "super king" slug.
 _SIZE_SLUG_FORMS = {
@@ -26,6 +26,11 @@ _SIZE_SLUG_FORMS = {
     "double": {"double"},
     "single": {"single"},
 }
+
+_PACK_TOKEN = re.compile(
+    r"^(\d+)(?:pack|pk|pcs|pc|set|bottle|bottles|can|cans)$",
+    re.I,
+)
 
 
 def _slug_gsm_values(tokens: set[str], slug_l: str) -> set[str]:
@@ -60,6 +65,47 @@ def _slug_size(tokens: set[str], slug_l: str) -> str | None:
     return None
 
 
+def _slug_pack_counts(tokens: set[str], slug_l: str) -> set[int]:
+    """Detect multipack quantities present in a candidate slug (6pack, 12x750ml, …)."""
+    found: set[int] = set()
+    joined = slug_l.replace("_", "-")
+
+    for m in re.finditer(r"(\d+)\s*[x×]\s*\d+(?:\.\d+)?\s*(?:ml|l)\b", joined):
+        n = int(m.group(1))
+        if 2 <= n <= 240:
+            found.add(n)
+    for m in re.finditer(
+        r"(?:^|-)(\d+)(?:-|)?(?:pack|pk|pcs|pc|set|bottles?|cans?)(?:-|$)", joined
+    ):
+        n = int(m.group(1))
+        if 2 <= n <= 240:
+            found.add(n)
+    for m in re.finditer(r"(?:^|-)pack(?:-|)?of(?:-|)?(\d+)(?:-|$)", joined):
+        n = int(m.group(1))
+        if 2 <= n <= 240:
+            found.add(n)
+    for m in re.finditer(r"(?:^|-)case(?:-|)?(?:of(?:-|)?)?(\d+)(?:-|$)", joined):
+        n = int(m.group(1))
+        if 2 <= n <= 240:
+            found.add(n)
+    if re.search(r"(?:^|-)dozen(?:-|$)", joined):
+        found.add(12)
+
+    for t in tokens:
+        m = _PACK_TOKEN.fullmatch(t)
+        if m:
+            n = int(m.group(1))
+            if 2 <= n <= 240:
+                found.add(n)
+        m = re.fullmatch(r"(\d+)x\d+ml", t)
+        if m:
+            n = int(m.group(1))
+            if 2 <= n <= 240:
+                found.add(n)
+
+    return found
+
+
 def _attr_in_candidate(attr: str, tokens: set[str], slug_l: str, attr_key: str | None = None) -> bool:
     """
     Check attribute presence without naive substring traps
@@ -74,6 +120,25 @@ def _attr_in_candidate(attr: str, tokens: set[str], slug_l: str, attr_key: str |
 
     if attr.endswith("gsm") or (attr_key == "gsm"):
         return attr in tokens or attr in _slug_gsm_values(tokens, slug_l)
+
+    if attr_key == "pack_count" or re.fullmatch(r"\d+pack", attr):
+        needed = parse_pack_count_value(attr)
+        if needed is None:
+            return False
+        present = _slug_pack_counts(tokens, slug_l)
+        if needed == 1:
+            # Single unit: OK only when candidate is not a multipack/case
+            return not present
+        if needed in present:
+            return True
+        # alias token hits (6pk, pack-of-6, …)
+        for alias in pack_count_aliases(needed):
+            if alias in tokens or re.search(rf"(^|-){re.escape(alias)}(-|$)", slug_l):
+                return True
+        # 6x750ml style
+        if re.search(rf"(^|-){needed}\s*[x×]\s*\d+", slug_l):
+            return True
+        return False
 
     # token exact match preferred
     if attr in tokens:
@@ -114,16 +179,39 @@ def _conflicts_hard_attrs(
         if slug_size and slug_size != needed:
             return f"size conflict (need {needed}, slug has {slug_size})"
 
+    if "pack_count" in hard:
+        needed_n = parse_pack_count_value(hard["pack_count"])
+        present = _slug_pack_counts(tokens, slug_l)
+        if needed_n is not None:
+            if needed_n == 1:
+                if present:
+                    return (
+                        f"quantity conflict (need single unit, "
+                        f"slug has pack {', '.join(str(p) for p in sorted(present))})"
+                    )
+            else:
+                if present and needed_n not in present:
+                    return (
+                        f"quantity conflict (need {needed_n}pack, "
+                        f"slug has {', '.join(f'{p}pack' for p in sorted(present))})"
+                    )
+                # Multipack source must not match a bare single-unit slug
+                if not present:
+                    return (
+                        f"quantity conflict (need {needed_n}pack, "
+                        f"slug has no multipack/case quantity)"
+                    )
+
     if "volume" in hard:
         needed = hard["volume"]
-        # conflicting volumes like 400ml vs 500ml
+        # conflicting volumes like 400ml vs 500ml (include …x750ml forms)
         vols = {t for t in tokens if re.fullmatch(r"\d+ml", t) or re.fullmatch(r"\d+l", t)}
         vols.update(re.findall(r"\d+ml", slug_l))
-        if vols and needed not in vols and not any(
-            _attr_in_candidate(needed, tokens, slug_l, "volume") for _ in [0]
-        ):
+        vols.update(re.findall(r"(\d+ml)", " ".join(re.findall(r"\d+x(\d+ml)", slug_l))))
+        # from 6x750ml
+        vols.update(re.findall(r"\d+[x×](\d+ml)", slug_l.replace(" ", "")))
+        if vols and needed not in vols:
             if not _attr_in_candidate(needed, tokens, slug_l, "volume"):
-                # only conflict when a *different* volume is clearly present
                 other = {v for v in vols if v != needed}
                 if other:
                     return f"volume conflict (need {needed}, slug has {', '.join(sorted(other))})"

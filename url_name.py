@@ -7,11 +7,20 @@ from urllib.parse import urlparse
 
 
 def slug_from_product_url(url: str) -> str:
-    """Extract the product slug from a Kogan or BigW URL."""
+    """Extract the product slug from a DuringDays, Kogan, or BigW product URL."""
     if not url or url == "-":
         return ""
     path = urlparse(url).path.strip("/")
     parts = [p for p in path.split("/") if p]
+
+    # During Days / Shopify-style: .../products/<slug>
+    if "products" in parts:
+        try:
+            i = parts.index("products")
+            if i + 1 < len(parts):
+                return parts[i + 1]
+        except ValueError:
+            pass
 
     # BigW: .../product/<slug>/p/<id>
     if "product" in parts:
@@ -37,12 +46,12 @@ def slug_from_product_url(url: str) -> str:
 def name_from_url(url: str) -> str:
     """
     Build a human-readable product name from the URL slug.
-    e.g. devanti-aroma-diffuser-500ml → Devanti Aroma Diffuser 500ml
+    e.g. zenses-massage-table-3-fold-brown → Zenses Massage Table 3 Fold Brown
     """
     slug = slug_from_product_url(url)
     if not slug:
         return "-"
-    # keep alphanumerics and hyphens; drop trailing junk
+    # keep alphanumerics and hyphens; drop trailing junk / query leftovers
     slug = re.sub(r"[^a-zA-Z0-9\-]+", "-", slug).strip("-")
     words = [w for w in slug.split("-") if w]
     if not words:
@@ -57,6 +66,25 @@ def name_from_url(url: str) -> str:
         else:
             out.append(w.capitalize())
     return " ".join(out)
+
+
+def title_from_product_url(url: str, *, fetch_live: bool = False) -> str:
+    """
+    Resolve a product Title from a During Days (or other) product URL.
+    Prefer slug-derived title; optionally enrich from the live page.
+    """
+    if not url or not str(url).strip().startswith("http"):
+        return ""
+    url = str(url).strip()
+    if fetch_live:
+        live = fetch_name_from_page(url)
+        if live:
+            # Strip common storefront suffixes
+            live = re.split(r"\s*[\|–—-]\s*During\s*Days", live, flags=re.I)[0].strip()
+            if live:
+                return live
+    name = name_from_url(url)
+    return "" if name in {"", "-"} else name
 
 
 def fetch_name_from_page(url: str, timeout: float = 12.0) -> str | None:

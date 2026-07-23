@@ -27,6 +27,40 @@ def _norm_volume(num: float, unit: str) -> str:
     return f"{num}ml".replace(".0ml", "ml")
 
 
+def _norm_pack_count(n: int) -> str:
+    """Canonical pack token used in attributes / hard_attrs (e.g. 6pack)."""
+    return f"{int(n)}pack"
+
+
+def pack_count_aliases(n: int) -> list[str]:
+    """Slug forms that all mean the same multipack quantity."""
+    n = int(n)
+    return [
+        f"{n}pack",
+        f"{n}pk",
+        f"{n}pcs",
+        f"{n}pc",
+        f"{n}set",
+        f"{n}bottle",
+        f"{n}bottles",
+        f"packof{n}",
+        f"pack-of-{n}",
+        f"{n}-pack",
+        f"{n}x",
+    ]
+
+
+def parse_pack_count_value(value: str) -> int | None:
+    """Extract integer pack quantity from a normalised pack attr like '6pack'."""
+    if not value:
+        return None
+    m = re.match(r"(\d+)", str(value).lower().strip())
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n if 1 <= n <= 240 else None
+
+
 def build_brand_set(titles: list[str] | None = None) -> set[str]:
     """
     Known brands = seed list UNION leading tokens that appear on >= 2 titles.
@@ -161,20 +195,7 @@ class ProductQuery:
             attr_words.add("watt")
             attr_words.add("watts")
 
-        # volume
-        vol_re = re.compile(
-            r"(\d+(?:\.\d+)?)\s?(ml|l|litre|liter)\b", re.IGNORECASE
-        )
-        m = vol_re.search(self.title_norm)
-        if m:
-            norm = _norm_volume(float(m.group(1)), m.group(2))
-            attrs["volume"] = norm
-            hard["volume"] = norm
-            attr_words.add(m.group(1))
-            attr_words.add(m.group(2).lower())
-            attr_words.add(norm)
-
-        # dimensions e.g. 120x60x40cm or 120 x 60 cm
+        # dimensions e.g. 120x60x40cm or 120 x 60 cm (before Nxvolume so cm dims win)
         dim_re = re.compile(
             r"(\d+)\s?x\s?(\d+)(?:\s?x\s?(\d+))?\s?cm\b", re.IGNORECASE
         )
@@ -188,23 +209,80 @@ class ProductQuery:
             attr_words.add("cm")
             attr_words.add(dim)
 
-        # pack count
-        pack_re = re.compile(
-            r"(\d+)\s?(pcs|pack|piece|pieces|pk|set)\b", re.IGNORECASE
+        # Multipack × volume: 6x750ml / 12 x 750 ml / 6×750mL (wine cases etc.)
+        nx_vol = re.search(
+            r"\b(\d+)\s*[x×]\s*(\d+(?:\.\d+)?)\s*(ml|l|litre|liter)\b",
+            self.title_norm,
+            re.IGNORECASE,
         )
-        m = pack_re.search(self.title_norm)
-        if m:
-            n = m.group(1)
-            unit = m.group(2).lower()
-            if unit in {"piece", "pieces", "pcs", "pk"}:
-                slug_forms = [f"{n}pcs", f"{n}pack", f"{n}pk"]
-            else:
-                slug_forms = [f"{n}{unit}", f"{n}pack"]
-            attrs["pack_count"] = slug_forms[0]
-            hard["pack_count"] = slug_forms[0]
-            attr_words.add(n)
-            attr_words.add(unit)
-            attr_words.update(slug_forms)
+        if nx_vol and "dimensions" not in attrs:
+            pack_n = int(nx_vol.group(1))
+            if 2 <= pack_n <= 240:
+                pack = _norm_pack_count(pack_n)
+                attrs["pack_count"] = pack
+                hard["pack_count"] = pack
+                attr_words.add(str(pack_n))
+                attr_words.update(pack_count_aliases(pack_n))
+            vol_norm = _norm_volume(float(nx_vol.group(2)), nx_vol.group(3))
+            attrs["volume"] = vol_norm
+            hard["volume"] = vol_norm
+            attr_words.add(nx_vol.group(2))
+            attr_words.add(nx_vol.group(3).lower())
+            attr_words.add(vol_norm)
+
+        # volume (single bottle / unit) — skip if already set from Nxvolume
+        if "volume" not in attrs:
+            vol_re = re.compile(
+                r"(\d+(?:\.\d+)?)\s?(ml|l|litre|liter)\b", re.IGNORECASE
+            )
+            m = vol_re.search(self.title_norm)
+            if m:
+                norm = _norm_volume(float(m.group(1)), m.group(2))
+                attrs["volume"] = norm
+                hard["volume"] = norm
+                attr_words.add(m.group(1))
+                attr_words.add(m.group(2).lower())
+                attr_words.add(norm)
+
+        # pack / bottle / case quantity (hard discriminator for wine & multipacks)
+        if "pack_count" not in attrs:
+            pack_n: int | None = None
+            pack_patterns = [
+                re.compile(r"\bpack\s*of\s*(\d+)\b", re.I),
+                re.compile(r"\bcase\s*of\s*(\d+)\b", re.I),
+                re.compile(r"\b(\d+)\s*[\-]?\s*pack\b", re.I),
+                re.compile(r"\b(\d+)\s*(?:pcs|pieces?|pk|set)\b", re.I),
+                re.compile(r"\b(\d+)\s*bottles?\b", re.I),
+                re.compile(r"\b(\d+)\s*cans?\b", re.I),
+            ]
+            for pat in pack_patterns:
+                m = pat.search(self.title_norm)
+                if m:
+                    pack_n = int(m.group(1))
+                    break
+            if pack_n is None and re.search(r"\bdozen\b", self.title_norm):
+                pack_n = 12
+            if pack_n is not None and 2 <= pack_n <= 240:
+                pack = _norm_pack_count(pack_n)
+                attrs["pack_count"] = pack
+                hard["pack_count"] = pack
+                attr_words.add(str(pack_n))
+                attr_words.update(pack_count_aliases(pack_n))
+                attr_words.update({"pack", "case", "bottle", "bottles", "dozen"})
+
+        # Explicit single unit when volume present but no multipack
+        # (stops 750ml singles matching 6x750ml cases)
+        if "pack_count" not in attrs and "volume" in attrs:
+            if re.search(
+                r"\b(bottle|single|each|unit)\b",
+                self.title_norm,
+            ) or not re.search(
+                r"\b(pack|case|dozen|bottles|cans|multipack|multi\s*pack)\b",
+                self.title_norm,
+            ):
+                attrs["pack_count"] = "1pack"
+                hard["pack_count"] = "1pack"
+                attr_words.update({"1pack", "1pk", "bottle", "single"})
 
         # weight
         wt_re = re.compile(r"(\d+(?:\.\d+)?)\s?kg\b", re.IGNORECASE)
@@ -258,6 +336,7 @@ class ProductQuery:
                 out.add("superking")
             if key == "size" and v == "kingsingle":
                 out.add("kingsingle")
+            # pack_count aliases are resolved inside matcher._attr_in_candidate
         return out
 
 
